@@ -88,10 +88,10 @@ app.post("/plans", async (req, res) => {
 
 app.put("/plans/:id", async (req, res) => {
   try {
-    const { name, salary, categories } = req.body;
+    const { name, salary, categories, carryForward } = req.body;
     const plan = await Plan.findByIdAndUpdate(
       req.params.id,
-      { name, salary, categories },
+      { name, salary, categories, carryForward },
       { new: true, runValidators: true }
     );
     res.json(plan);
@@ -262,6 +262,57 @@ app.delete("/incomes/:id", async (req, res) => {
   try {
     await Income.findByIdAndDelete(req.params.id);
     res.json({ message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+
+app.get("/plans/:planId/analytics", async (req, res) => {
+  try {
+    const plan = await Plan.findById(req.params.planId);
+    const periods = await Period.find({ planId: req.params.planId }).sort({ startDate: 1 });
+    const now = new Date();
+    const wishyMap = {};
+    const perPeriod = [];
+    let totalSpent = 0;
+
+    for (const period of periods) {
+      const [expenses, incomes] = await Promise.all([
+        Expense.find({ periodId: period._id }),
+        Income.find({ periodId: period._id }),
+      ]);
+      const spent  = expenses.reduce((s, e) => s + e.amount, 0);
+      const income = incomes.reduce((s, i) => s + i.amount, 0) || plan.salary;
+      perPeriod.push({
+        _id: period._id, label: period.label,
+        startDate: period.startDate, endDate: period.endDate,
+        spent, income, savings: income - spent,
+      });
+      totalSpent += spent;
+
+      if (!plan.carryForward && new Date(period.endDate) < now) {
+        const cats = period.categoryBudgets?.length ? period.categoryBudgets : plan.categories;
+        const byCat = {};
+        expenses.forEach(e => { byCat[e.category] = (byCat[e.category] || 0) + e.amount; });
+        for (const { name: catName, budget } of cats) {
+          const unused = Math.max(0, budget - (byCat[catName] || 0));
+          if (unused > 0) wishyMap[catName] = (wishyMap[catName] || 0) + unused;
+        }
+      }
+    }
+
+    const wishySavings = Object.entries(wishyMap)
+      .map(([name, accumulated]) => ({ name, accumulated }))
+      .sort((a, b) => b.accumulated - a.accumulated);
+    const totalWishySaved = wishySavings.reduce((s, w) => s + w.accumulated, 0);
+
+    res.json({
+      wishySavings,
+      summary: { totalSpent, totalWishySaved, periodCount: periods.length },
+      perPeriod,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

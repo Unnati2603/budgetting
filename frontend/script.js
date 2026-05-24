@@ -25,6 +25,7 @@ const state = {
   editingExpenseId: null,
   incomes: [],
   editingIncomeId: null,
+  analytics: null,
 };
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
@@ -129,11 +130,38 @@ async function loadIncomes() {
   state.incomes = await fetch(`${API}/periods/${state.activePeriod._id}/incomes`).then(r => r.json());
 }
 
+async function loadAnalytics() {
+  state.analytics = await fetch(`${API}/plans/${state.activePlan._id}/analytics`).then(r => r.json());
+}
+
+async function autoCreatePeriodIfNeeded() {
+  if (!state.periods.length) return;
+  let latest = [...state.periods].sort((a, b) => new Date(b.endDate) - new Date(a.endDate))[0];
+  if (latest.type === "custom") return;
+  const now = new Date();
+  let created = false;
+  for (let i = 0; i < 24; i++) {
+    if (new Date(latest.endDate) >= now) break;
+    const s = toInputDate(new Date(latest.endDate));
+    const e = autoEndDate(s, latest.type);
+    const l = autoLabel(s, latest.type);
+    const r = await fetch(`${API}/plans/${state.activePlan._id}/periods`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: l, type: latest.type, startDate: s, endDate: e }),
+    });
+    latest = await r.json();
+    created = true;
+  }
+  if (created) await loadPeriods();
+}
+
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
 async function openPlan(id) {
   state.activePlan = state.plans.find(p => p._id === id);
   await loadPeriods();
+  await autoCreatePeriodIfNeeded();
+  await loadAnalytics();
   state.view = "periods";
   state.editMode = false;
   render();
@@ -151,7 +179,7 @@ async function openPeriod(id) {
 
 function goPlans() {
   Object.assign(state, { view: "plans", activePlan: null, periods: [],
-    activePeriod: null, expenses: [], prevExpenses: [], incomes: [] });
+    activePeriod: null, expenses: [], prevExpenses: [], incomes: [], analytics: null });
   render();
 }
 
@@ -173,8 +201,9 @@ function switchTab(tab) {
 // ─── Plans CRUD ───────────────────────────────────────────────────────────────
 
 async function createPlan() {
-  const name   = document.getElementById("np-name").value.trim();
-  const salary = Number(document.getElementById("np-salary").value);
+  const name         = document.getElementById("np-name").value.trim();
+  const salary       = Number(document.getElementById("np-salary").value);
+  const carryForward = document.getElementById("np-carry").checked;
   if (!name || !salary) { alert("Name and salary are required"); return; }
   const categories = [];
   document.querySelectorAll(".np-cat-row").forEach(row => {
@@ -184,7 +213,7 @@ async function createPlan() {
   });
   await fetch(`${API}/plans`, { method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, salary, categories }) });
+    body: JSON.stringify({ name, salary, categories, carryForward }) });
   await loadPlans();
   state.view = "plans";
   render();
@@ -192,8 +221,9 @@ async function createPlan() {
 
 async function savePlan() {
   const draft = state.editDraft;
-  draft.name   = document.getElementById("edit-name").value.trim();
-  draft.salary = Number(document.getElementById("edit-salary").value);
+  draft.name         = document.getElementById("edit-name").value.trim();
+  draft.salary       = Number(document.getElementById("edit-salary").value);
+  draft.carryForward = document.getElementById("edit-carry").checked;
   const categories = [];
   document.querySelectorAll(".edit-cat-row").forEach(row => {
     const n = row.querySelector(".edit-cat-name").value.trim();
@@ -206,6 +236,7 @@ async function savePlan() {
   state.editMode = false;
   state.editDraft = null;
   await loadPlans();
+  await loadAnalytics();
   render();
 }
 
@@ -406,6 +437,10 @@ function renderNewPlan() {
           <div class="field"><label>Plan Name</label><input id="np-name" type="text" placeholder="e.g. Main Budget"></div>
           <div class="field"><label>Monthly Income</label><input id="np-salary" type="number" placeholder="98000"></div>
         </div>
+        <label class="plan-option">
+          <input type="checkbox" id="np-carry">
+          <span>Carry unused budget forward to next period</span>
+        </label>
       </div>
       <div class="section-label">Categories</div>
       <div class="form-card">
@@ -429,6 +464,54 @@ function addNpCatRow() {
     <button class="icon-btn" onclick="this.closest('.np-cat-row').remove()">×</button>
   `;
   document.getElementById("np-cat-list").appendChild(row);
+}
+
+// ─── View: Plan Dashboard ─────────────────────────────────────────────────────
+
+function renderPlanDashboard() {
+  const a = state.analytics;
+  if (!a) return "";
+  const { summary, wishySavings, perPeriod } = a;
+  const avgPerPeriod = summary.periodCount > 0
+    ? Math.round(summary.totalSpent / summary.periodCount) : 0;
+
+  const statsHtml = `
+    <div class="dash-grid">
+      <div class="dash-stat">
+        <div class="dash-label">Total Spent</div>
+        <div class="dash-val">${fmt(summary.totalSpent)}</div>
+        <div class="dash-sub">${summary.periodCount} period${summary.periodCount !== 1 ? "s" : ""}</div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-label">Avg / Period</div>
+        <div class="dash-val">${fmt(avgPerPeriod)}</div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-label">Wishy Wish</div>
+        <div class="dash-val wishy-val">${fmt(summary.totalWishySaved)}</div>
+        <div class="dash-sub">unused budget</div>
+      </div>
+    </div>
+  `;
+
+  const wishyHtml = (!state.activePlan.carryForward && wishySavings.length) ? `
+    <div class="wishy-section">
+      <div class="wishy-header">✦ Wishy Wish Savings — by Category</div>
+      ${wishySavings.map(w => {
+        const pct = summary.totalWishySaved > 0
+          ? Math.round((w.accumulated / summary.totalWishySaved) * 100) : 0;
+        return `
+          <div class="wishy-row">
+            <div class="wishy-cat">${w.name}</div>
+            <div class="wishy-bar-track"><div class="wishy-bar-fill" style="width:${pct}%"></div></div>
+            <div class="wishy-amt">${fmt(w.accumulated)}</div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  ` : "";
+
+  return `<div class="dash-section">${statsHtml}${wishyHtml}</div>`;
 }
 
 // ─── View: Periods list ───────────────────────────────────────────────────────
@@ -486,6 +569,7 @@ function renderPeriods() {
         </div>
         <button class="edit-btn" onclick="enterEditMode()">Edit</button>
       </header>
+      ${renderPlanDashboard()}
       <div class="plan-list">${cards}</div>
       ${trendHtml}
       <div class="action-row" style="margin-top:20px">
@@ -519,6 +603,10 @@ function renderEditPlan(p) {
           <div class="field"><label>Plan Name</label><input id="edit-name" type="text" value="${p.name}"></div>
           <div class="field"><label>Monthly Income</label><input id="edit-salary" type="number" value="${p.salary}"></div>
         </div>
+        <label class="plan-option">
+          <input type="checkbox" id="edit-carry" ${p.carryForward ? "checked" : ""}>
+          <span>Carry unused budget forward to next period</span>
+        </label>
       </div>
       <div class="section-label">Categories</div>
       <div class="form-card">
@@ -741,18 +829,32 @@ function renderPeriod() {
 
   const budgetCategories = (period.categoryBudgets && period.categoryBudgets.length)
     ? period.categoryBudgets : plan.categories;
+
+  let wishyTotal = 0;
   const budgetHtml = budgetCategories.map(({ name, budget }) => {
-    const prevSpent  = prevByCategory[name] || 0;
-    const carryOver  = Math.max(0, prevSpent - budget);
-    const effective  = budget - carryOver;
-    const sp         = byCategory[name] || 0;
-    const pr         = effective - sp;
-    const over       = pr < 0;
-    const pct        = effective > 0 ? Math.min((sp / effective) * 100, 100) : 100;
-    const clr        = pct < 70 ? "var(--success)" : pct < 90 ? "var(--warning)" : "var(--danger)";
-    const carryNote  = carryOver > 0
-      ? `<div class="carry-note">${fmt(carryOver)} carried from ${prevPeriod?.label || "last period"} · budget reduced to ${fmt(effective)}</div>`
-      : "";
+    let effective = budget;
+    let carryNote = "";
+
+    if (plan.carryForward && prevPeriod) {
+      const prevCatBudget = ((prevPeriod.categoryBudgets?.length
+        ? prevPeriod.categoryBudgets : plan.categories)
+        .find(c => c.name === name)?.budget) || budget;
+      const prevUnused = Math.max(0, prevCatBudget - (prevByCategory[name] || 0));
+      if (prevUnused > 0) {
+        effective = budget + prevUnused;
+        carryNote = `<div class="carry-note">+${fmt(prevUnused)} carried from ${prevPeriod.label || "last period"} · budget boosted to ${fmt(effective)}</div>`;
+      }
+    }
+
+    const sp   = byCategory[name] || 0;
+    const pr   = effective - sp;
+    const over = pr < 0;
+    const pct  = effective > 0 ? Math.min((sp / effective) * 100, 100) : 100;
+    const clr  = pct < 70 ? "var(--success)" : pct < 90 ? "var(--warning)" : "var(--danger)";
+
+    const unused = Math.max(0, effective - sp);
+    if (!plan.carryForward && unused > 0) wishyTotal += unused;
+
     return `
       <div class="budget-item">
         <div class="budget-header">
@@ -767,12 +869,19 @@ function renderPeriod() {
         ${carryNote}
         <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${clr}"></div></div>
         <div class="budget-footer">
-          <span>${over ? fmt(sp) + " spent · carries over" : fmt(sp) + " spent"}</span>
+          <span>${fmt(sp)} spent</span>
           <span>${Math.round(pct)}%</span>
         </div>
       </div>
     `;
   }).join("");
+
+  const wishyBanner = (!plan.carryForward && wishyTotal > 0) ? `
+    <div class="wishy-banner">
+      <span class="wishy-banner-title">✦ Wishy Wish Savings</span>
+      <span class="wishy-banner-amt">${fmt(wishyTotal)} unused this period</span>
+    </div>
+  ` : "";
 
   const tA = state.activeTab === "transactions" ? "active" : "";
   const bA = state.activeTab === "budget"       ? "active" : "";
@@ -824,7 +933,7 @@ function renderPeriod() {
       </div>
 
       <div class="tab-content ${tA}" id="content-transactions">${importBanner}${transactionsHtml}</div>
-      <div class="tab-content ${bA}" id="content-budget">${budgetHtml}</div>
+      <div class="tab-content ${bA}" id="content-budget">${wishyBanner}${budgetHtml}</div>
       <div class="tab-content ${cA}" id="content-compare">${renderCompareTab()}</div>
       <div class="tab-content ${iA}" id="content-income">${renderIncomeTab()}</div>
     </div>

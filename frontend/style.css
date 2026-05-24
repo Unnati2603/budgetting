@@ -2,8 +2,8 @@
   --bg: #090909;
   --surface: #0f0f0f;
   --border: #1e1e1e;
-  --text: #f0f0f0;
-  --muted: #525252;
+  --text: #e8f8b0;
+  --muted: #6a6a5a;
   --accent: #d4fc00;
   --success: #22c55e;
   --warning: #f59e0b;
@@ -11,6 +11,8 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root { color-scheme: dark; }
 
 body {
   background: var(--bg);
@@ -263,12 +265,12 @@ button:hover { opacity: 0.82; }
 
 .secondary-btn {
   background: none;
-  color: var(--muted);
-  border: 1px solid var(--border);
+  color: #909080;
+  border: 1px solid #3a3a32;
   font-weight: 400;
 }
 
-.secondary-btn:hover { color: var(--text); opacity: 1; }
+.secondary-btn:hover { color: var(--text); border-color: #606050; opacity: 1; }
 
 .danger-btn-sm {
   background: none;
@@ -756,4 +758,156 @@ button:hover { opacity: 0.82; }
   /* Action row stack on narrow screens */
   .action-row { flex-wrap: wrap; }
   .action-row button { flex: 1; min-width: 120px; }
+
+  /* Dashboard grid: single column on mobile */
+  .dash-grid { grid-template-columns: 1fr 1fr; }
+  .wishy-row { grid-template-columns: 1fr 60px; }
+  .wishy-bar-track { display: none; }
+}
+
+/* ── Plan option (carryForward checkbox) ──────────────────────────────────── */
+
+.plan-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  user-select: none;
+}
+
+.plan-option input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.plan-option:hover { color: var(--text); }
+
+/* ── Plan Dashboard ──────────────────────────────────────────────────────── */
+
+.dash-section {
+  margin-bottom: 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 16px;
+}
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.dash-stat {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.dash-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.dash-val {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text);
+}
+
+.dash-val.wishy-val { color: var(--accent); }
+
+.dash-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* ── Wishy Wish savings section ─────────────────────────────────────────── */
+
+.wishy-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.wishy-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.wishy-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 80px;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+}
+
+.wishy-cat {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wishy-bar-track {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.wishy-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 0 6px rgba(212,252,0,0.4);
+}
+
+.wishy-amt {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-align: right;
+}
+
+/* ── Wishy banner in budget tab ─────────────────────────────────────────── */
+
+.wishy-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(212,252,0,0.25);
+  border-radius: 6px;
+  background: rgba(212,252,0,0.04);
+}
+
+.wishy-banner-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+
+.wishy-banner-amt {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
 }
