@@ -1,4 +1,4 @@
-const API = "http://localhost:5000";
+const API = window.location.hostname === "localhost" ? "http://localhost:5000" : "/api";
 
 const DEFAULT_CATEGORIES = [
   { name: "Savings & Investments", budget: 60000 },
@@ -23,6 +23,8 @@ const state = {
   editMode: false,
   editDraft: null,
   editingExpenseId: null,
+  incomes: [],
+  editingIncomeId: null,
 };
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
@@ -123,6 +125,10 @@ async function loadPrevExpenses() {
     : [];
 }
 
+async function loadIncomes() {
+  state.incomes = await fetch(`${API}/periods/${state.activePeriod._id}/incomes`).then(r => r.json());
+}
+
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
 async function openPlan(id) {
@@ -135,22 +141,24 @@ async function openPlan(id) {
 
 async function openPeriod(id) {
   state.activePeriod = state.periods.find(p => p._id === id);
-  await Promise.all([loadExpenses(), loadPrevExpenses()]);
+  await Promise.all([loadExpenses(), loadPrevExpenses(), loadIncomes()]);
   state.view = "period";
   state.activeTab = "transactions";
   state.editingExpenseId = null;
+  state.editingIncomeId = null;
   render();
 }
 
 function goPlans() {
   Object.assign(state, { view: "plans", activePlan: null, periods: [],
-    activePeriod: null, expenses: [], prevExpenses: [] });
+    activePeriod: null, expenses: [], prevExpenses: [], incomes: [] });
   render();
 }
 
 function goPeriods() {
   Object.assign(state, { view: "periods", activePeriod: null, expenses: [],
-    prevExpenses: [], editMode: false, editingExpenseId: null });
+    prevExpenses: [], editMode: false, editingExpenseId: null,
+    incomes: [], editingIncomeId: null });
   render();
 }
 
@@ -292,6 +300,47 @@ async function importRecurring() {
         recurring: true, createdAt: new Date(state.activePeriod.startDate).toISOString() }) })
   ));
   await loadExpenses();
+  render();
+}
+
+async function addIncome() {
+  const source    = document.getElementById("inc-source").value.trim();
+  const amount    = Number(document.getElementById("inc-amount").value);
+  const note      = document.getElementById("inc-note").value.trim();
+  const date      = document.getElementById("inc-date").value;
+  const recurring = document.getElementById("inc-recurring").checked;
+  if (!source) { alert("Enter a source"); return; }
+  if (!amount) { alert("Enter an amount"); return; }
+  await fetch(`${API}/periods/${state.activePeriod._id}/incomes`, { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, amount, note, recurring, createdAt: buildCreatedAt(date) }) });
+  await loadIncomes();
+  render();
+}
+
+async function saveIncomeEdit(id) {
+  const source    = document.getElementById(`edit-inc-source-${id}`).value.trim();
+  const amount    = Number(document.getElementById(`edit-inc-amt-${id}`).value);
+  const note      = document.getElementById(`edit-inc-note-${id}`).value.trim();
+  const date      = document.getElementById(`edit-inc-date-${id}`).value;
+  const recurring = document.getElementById(`edit-inc-rec-${id}`).checked;
+  await fetch(`${API}/incomes/${id}`, { method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, amount, note, recurring, createdAt: buildCreatedAt(date) }) });
+  state.editingIncomeId = null;
+  await loadIncomes();
+  render();
+}
+
+function cancelIncomeEdit() {
+  state.editingIncomeId = null;
+  render();
+}
+
+async function deleteIncome(id) {
+  state.editingIncomeId = null;
+  await fetch(`${API}/incomes/${id}`, { method: "DELETE" });
+  await loadIncomes();
   render();
 }
 
@@ -503,6 +552,139 @@ function cancelEdit() {
   render();
 }
 
+// ─── Calendar date-range picker ───────────────────────────────────────────────
+
+const cal = { year: 0, month: 0, step: "start", startVal: "", endVal: "", hoverVal: "" };
+
+function openCalendar() {
+  const s = document.getElementById("per-start").value;
+  const d = s ? new Date(s + "T00:00:00") : new Date();
+  cal.year     = d.getFullYear();
+  cal.month    = d.getMonth();
+  cal.startVal = s;
+  cal.endVal   = document.getElementById("per-end").value || "";
+  cal.step     = "start";
+  cal.hoverVal = "";
+  injectCal();
+}
+
+function closeCalendar() {
+  const el = document.getElementById("cal-popup");
+  if (el) el.remove();
+}
+
+function injectCal() {
+  let el = document.getElementById("cal-popup");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "cal-popup";
+    document.getElementById("cal-anchor").appendChild(el);
+  }
+  el.innerHTML = buildCalHtml();
+}
+
+function buildCalHtml() {
+  const { year, month, startVal, endVal, hoverVal, step } = cal;
+  const monthLabel = new Date(year, month, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDow    = (new Date(year, month, 1).getDay() + 6) % 7; // Mon=0
+
+  const previewB = (step === "end" && hoverVal) ? hoverVal : endVal;
+  const rangeMin = startVal && previewB ? (startVal < previewB ? startVal : previewB) : "";
+  const rangeMax = startVal && previewB ? (startVal < previewB ? previewB : startVal) : "";
+
+  let cells = "";
+  for (let i = 0; i < firstDow; i++) cells += `<div class="cal-cell"></div>`;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds      = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const isSel   = ds === rangeMin || ds === rangeMax;
+    const inRange = rangeMin && ds > rangeMin && ds < rangeMax;
+    const isToday = ds === toInputDate(new Date());
+    const clsArr  = ["cal-cell", "cal-day"];
+    if (isSel)   clsArr.push("cal-sel");
+    if (inRange) clsArr.push("cal-range");
+    if (isToday && !isSel) clsArr.push("cal-today");
+    cells += `<div class="${clsArr.join(" ")}"
+      onclick="calPick('${ds}')"
+      onmouseenter="calHover('${ds}')"
+      onmouseleave="calHover('')">${d}</div>`;
+  }
+
+  const prompt = step === "start" ? "Select start date" : "Select end date";
+  return `
+    <div class="cal-nav">
+      <button class="cal-nav-btn" onclick="calShift(-1)">‹</button>
+      <span class="cal-month">${monthLabel}</span>
+      <button class="cal-nav-btn" onclick="calShift(1)">›</button>
+    </div>
+    <div class="cal-weekdays"><div>Mo</div><div>Tu</div><div>We</div><div>Th</div><div>Fr</div><div>Sa</div><div>Su</div></div>
+    <div class="cal-grid">${cells}</div>
+    <div class="cal-footer">
+      <span class="cal-prompt">${prompt}</span>
+      <button class="secondary-btn cal-close-btn" onclick="closeCalendar()">Close</button>
+    </div>
+  `;
+}
+
+function calShift(dir) {
+  cal.month += dir;
+  if (cal.month > 11) { cal.month = 0; cal.year++; }
+  if (cal.month < 0)  { cal.month = 11; cal.year--; }
+  injectCal();
+}
+
+function calHover(ds) {
+  if (cal.step !== "end") return;
+  cal.hoverVal = ds;
+  injectCal();
+}
+
+function calPick(ds) {
+  if (cal.step === "start") {
+    cal.startVal = ds;
+    const type = document.getElementById("per-type").value;
+    if (type !== "custom") {
+      cal.endVal = autoEndDate(ds, type);
+      applyCalendar();
+    } else {
+      cal.step     = "end";
+      cal.endVal   = "";
+      cal.hoverVal = "";
+      injectCal();
+    }
+  } else {
+    cal.endVal   = ds < cal.startVal ? cal.startVal : ds;
+    cal.startVal = ds < cal.startVal ? ds           : cal.startVal;
+    applyCalendar();
+  }
+}
+
+function applyCalendar() {
+  if (!cal.startVal || !cal.endVal) return;
+  document.getElementById("per-start").value = cal.startVal;
+  document.getElementById("per-end").value   = cal.endVal;
+  updateDateBar();
+  const type = document.getElementById("per-type").value;
+  if (type !== "custom") {
+    document.getElementById("per-label").value = autoLabel(cal.startVal, type);
+  }
+  closeCalendar();
+}
+
+function updateDateBar() {
+  const bar = document.getElementById("cal-trigger");
+  if (!bar) return;
+  const s = document.getElementById("per-start").value;
+  const e = document.getElementById("per-end").value;
+  const fmt2 = v => v ? new Date(v + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : null;
+  bar.innerHTML = `
+    <span class="${s ? "drb-val" : "drb-ph"}">${fmt2(s) || "Start date"}</span>
+    <span class="drb-sep">→</span>
+    <span class="${e ? "drb-val" : "drb-ph"}">${fmt2(e) || "End date"}</span>
+    <span class="drb-caret">⌄</span>
+  `;
+}
+
 // ─── View: New Period ─────────────────────────────────────────────────────────
 
 function renderNewPeriod() {
@@ -530,9 +712,17 @@ function renderNewPeriod() {
             </select>
           </div>
         </div>
-        <div class="np-meta-row">
-          <div class="field"><label>Start Date</label><input id="per-start" type="date" value="${startStr}" onchange="onStartChange()"></div>
-          <div class="field"><label>End Date</label><input id="per-end" type="date" value="${endStr}"></div>
+        <div class="field" style="margin-top:10px">
+          <label>Date Range</label>
+          <div id="cal-trigger" class="date-range-bar" onclick="openCalendar()">
+            <span class="${startStr ? "drb-val" : "drb-ph"}">${startStr ? new Date(startStr+"T00:00:00").toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}) : "Start date"}</span>
+            <span class="drb-sep">→</span>
+            <span class="${endStr ? "drb-val" : "drb-ph"}">${endStr ? new Date(endStr+"T00:00:00").toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}) : "End date"}</span>
+            <span class="drb-caret">⌄</span>
+          </div>
+          <input type="hidden" id="per-start" value="${startStr}">
+          <input type="hidden" id="per-end"   value="${endStr}">
+          <div id="cal-anchor"></div>
         </div>
       </div>
       <div class="action-row">
@@ -546,9 +736,11 @@ function renderNewPeriod() {
 function onTypeChange() {
   const type  = document.getElementById("per-type").value;
   const start = document.getElementById("per-start").value;
+  closeCalendar();
   if (type !== "custom" && start) {
     document.getElementById("per-end").value   = autoEndDate(start, type);
     document.getElementById("per-label").value = autoLabel(start, type);
+    updateDateBar();
   }
 }
 
@@ -618,8 +810,9 @@ function renderCompareTab() {
 function renderPeriod() {
   const plan   = state.activePlan;
   const period = state.activePeriod;
-  const spent  = state.expenses.reduce((s, e) => s + e.amount, 0);
-  const rem    = plan.salary - spent;
+  const spent       = state.expenses.reduce((s, e) => s + e.amount, 0);
+  const totalIncome = state.incomes.reduce((s, i) => s + i.amount, 0) || plan.salary;
+  const savings     = totalIncome - spent;
   const dayInfo = dayOfPeriod(period);
   const today   = toInputDate(new Date());
 
@@ -689,7 +882,9 @@ function renderPeriod() {
   state.prevExpenses.forEach(e => { prevByCategory[e.category] = (prevByCategory[e.category] || 0) + e.amount; });
   const prevPeriod = getPreviousPeriod();
 
-  const budgetHtml = plan.categories.map(({ name, budget }) => {
+  const budgetCategories = (period.categoryBudgets && period.categoryBudgets.length)
+    ? period.categoryBudgets : plan.categories;
+  const budgetHtml = budgetCategories.map(({ name, budget }) => {
     const prevSpent  = prevByCategory[name] || 0;
     const carryOver  = Math.max(0, prevSpent - budget);
     const effective  = budget - carryOver;
@@ -725,6 +920,7 @@ function renderPeriod() {
   const tA = state.activeTab === "transactions" ? "active" : "";
   const bA = state.activeTab === "budget"       ? "active" : "";
   const cA = state.activeTab === "compare"      ? "active" : "";
+  const iA = state.activeTab === "income"       ? "active" : "";
 
   const dayBadge = dayInfo
     ? `<span class="day-badge">Day ${dayInfo.day} of ${dayInfo.total}</span>`
@@ -742,10 +938,10 @@ function renderPeriod() {
       </header>
 
       <div class="summary">
-        <div class="summary-item"><div class="label">Salary</div><div class="value">${fmt(plan.salary)}</div></div>
+        <div class="summary-item"><div class="label">Income</div><div class="value">${fmt(totalIncome)}</div></div>
         <div class="summary-item"><div class="label">Spent</div><div class="value">${fmt(spent)}</div></div>
-        <div class="summary-item"><div class="label">Remaining</div>
-          <div class="value" style="color:${rem < 0 ? "var(--danger)" : "inherit"}">${fmt(rem)}</div>
+        <div class="summary-item"><div class="label">Savings</div>
+          <div class="value" style="color:${savings < 0 ? "var(--danger)" : savings > 0 ? "var(--success)" : "inherit"}">${fmt(savings)}</div>
         </div>
       </div>
 
@@ -765,6 +961,7 @@ function renderPeriod() {
           <button class="tab-btn ${tA}" id="tab-transactions" onclick="switchTab('transactions')">Transactions</button>
           <button class="tab-btn ${bA}" id="tab-budget"       onclick="switchTab('budget')">Budget</button>
           <button class="tab-btn ${cA}" id="tab-compare"      onclick="switchTab('compare')">Compare</button>
+          <button class="tab-btn ${iA}" id="tab-income"       onclick="switchTab('income')">Income</button>
         </div>
         <button class="csv-btn" onclick="exportCSV()">Export CSV</button>
       </div>
@@ -772,7 +969,82 @@ function renderPeriod() {
       <div class="tab-content ${tA}" id="content-transactions">${importBanner}${transactionsHtml}</div>
       <div class="tab-content ${bA}" id="content-budget">${budgetHtml}</div>
       <div class="tab-content ${cA}" id="content-compare">${renderCompareTab()}</div>
+      <div class="tab-content ${iA}" id="content-income">${renderIncomeTab()}</div>
     </div>
+  `;
+}
+
+// ─── View: Income tab ─────────────────────────────────────────────────────────
+
+function renderIncomeTab() {
+  const today = toInputDate(new Date());
+  const total = state.incomes.reduce((s, i) => s + i.amount, 0);
+
+  const itemsHtml = state.incomes.length
+    ? state.incomes.map(i => {
+        if (i._id === state.editingIncomeId) {
+          return `
+            <div class="expense-edit-form">
+              <div class="edit-expense-row">
+                <input type="text"   id="edit-inc-source-${i._id}" value="${i.source}" placeholder="Source">
+                <input type="number" id="edit-inc-amt-${i._id}"    value="${i.amount}" placeholder="Amount">
+              </div>
+              <div class="edit-expense-row">
+                <input type="text" id="edit-inc-note-${i._id}" value="${i.note || ""}" placeholder="Note">
+                <input type="date" id="edit-inc-date-${i._id}" value="${toInputDate(i.createdAt)}">
+              </div>
+              <div class="edit-expense-row">
+                <label class="recurring-label">
+                  <input type="checkbox" id="edit-inc-rec-${i._id}" ${i.recurring ? "checked" : ""}> Recurring
+                </label>
+                <div style="display:flex;gap:8px">
+                  <button onclick="saveIncomeEdit('${i._id}')">Save</button>
+                  <button class="secondary-btn" onclick="cancelIncomeEdit()">Cancel</button>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+        return `
+          <div class="expense-item">
+            <div class="expense-meta">
+              <div class="cat">
+                ${i.source}
+                ${i.recurring ? `<span class="recurring-badge">recurring</span>` : ""}
+              </div>
+              ${i.note ? `<div class="note">${i.note}</div>` : ""}
+              <div class="date">${fmtDateTime(i.createdAt)}</div>
+            </div>
+            <div class="expense-right">
+              <span class="expense-amount income-amount">${fmt(i.amount)}</span>
+              <button class="edit-expense-btn" onclick="state.editingIncomeId='${i._id}'; render()">Edit</button>
+              <button class="del-btn" onclick="deleteIncome('${i._id}')">Delete</button>
+            </div>
+          </div>
+        `;
+      }).join("")
+    : `<div class="empty">No income entries yet</div>`;
+
+  const totalRow = state.incomes.length ? `
+    <div class="income-total">
+      <span>Total Income</span>
+      <span class="income-total-val">${fmt(total)}</span>
+    </div>
+  ` : "";
+
+  return `
+    <div class="form-card" style="margin-top:16px">
+      <div class="form-row">
+        <input type="text"   id="inc-source"    placeholder="Source (e.g. Salary)" onkeydown="if(event.key==='Enter')addIncome()">
+        <input type="number" id="inc-amount"    placeholder="Amount (₹)">
+        <input type="text"   id="inc-note"      placeholder="Note">
+        <input type="date"   id="inc-date"      value="${today}">
+        <label class="recurring-label"><input type="checkbox" id="inc-recurring"> Recurring</label>
+        <button onclick="addIncome()">Add</button>
+      </div>
+    </div>
+    ${itemsHtml}
+    ${totalRow}
   `;
 }
 
