@@ -552,139 +552,6 @@ function cancelEdit() {
   render();
 }
 
-// ─── Calendar date-range picker ───────────────────────────────────────────────
-
-const cal = { year: 0, month: 0, step: "start", startVal: "", endVal: "", hoverVal: "" };
-
-function openCalendar() {
-  const s = document.getElementById("per-start").value;
-  const d = s ? new Date(s + "T00:00:00") : new Date();
-  cal.year     = d.getFullYear();
-  cal.month    = d.getMonth();
-  cal.startVal = s;
-  cal.endVal   = document.getElementById("per-end").value || "";
-  cal.step     = "start";
-  cal.hoverVal = "";
-  injectCal();
-}
-
-function closeCalendar() {
-  const el = document.getElementById("cal-popup");
-  if (el) el.remove();
-}
-
-function injectCal() {
-  let el = document.getElementById("cal-popup");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "cal-popup";
-    document.getElementById("cal-anchor").appendChild(el);
-  }
-  el.innerHTML = buildCalHtml();
-}
-
-function buildCalHtml() {
-  const { year, month, startVal, endVal, hoverVal, step } = cal;
-  const monthLabel = new Date(year, month, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const firstDow    = (new Date(year, month, 1).getDay() + 6) % 7; // Mon=0
-
-  const previewB = (step === "end" && hoverVal) ? hoverVal : endVal;
-  const rangeMin = startVal && previewB ? (startVal < previewB ? startVal : previewB) : "";
-  const rangeMax = startVal && previewB ? (startVal < previewB ? previewB : startVal) : "";
-
-  let cells = "";
-  for (let i = 0; i < firstDow; i++) cells += `<div class="cal-cell"></div>`;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const ds      = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const isSel   = ds === rangeMin || ds === rangeMax;
-    const inRange = rangeMin && ds > rangeMin && ds < rangeMax;
-    const isToday = ds === toInputDate(new Date());
-    const clsArr  = ["cal-cell", "cal-day"];
-    if (isSel)   clsArr.push("cal-sel");
-    if (inRange) clsArr.push("cal-range");
-    if (isToday && !isSel) clsArr.push("cal-today");
-    cells += `<div class="${clsArr.join(" ")}"
-      onclick="calPick('${ds}')"
-      onmouseenter="calHover('${ds}')"
-      onmouseleave="calHover('')">${d}</div>`;
-  }
-
-  const prompt = step === "start" ? "Select start date" : "Select end date";
-  return `
-    <div class="cal-nav">
-      <button class="cal-nav-btn" onclick="calShift(-1)">‹</button>
-      <span class="cal-month">${monthLabel}</span>
-      <button class="cal-nav-btn" onclick="calShift(1)">›</button>
-    </div>
-    <div class="cal-weekdays"><div>Mo</div><div>Tu</div><div>We</div><div>Th</div><div>Fr</div><div>Sa</div><div>Su</div></div>
-    <div class="cal-grid">${cells}</div>
-    <div class="cal-footer">
-      <span class="cal-prompt">${prompt}</span>
-      <button class="secondary-btn cal-close-btn" onclick="closeCalendar()">Close</button>
-    </div>
-  `;
-}
-
-function calShift(dir) {
-  cal.month += dir;
-  if (cal.month > 11) { cal.month = 0; cal.year++; }
-  if (cal.month < 0)  { cal.month = 11; cal.year--; }
-  injectCal();
-}
-
-function calHover(ds) {
-  if (cal.step !== "end") return;
-  cal.hoverVal = ds;
-  injectCal();
-}
-
-function calPick(ds) {
-  if (cal.step === "start") {
-    cal.startVal = ds;
-    const type = document.getElementById("per-type").value;
-    if (type !== "custom") {
-      cal.endVal = autoEndDate(ds, type);
-      applyCalendar();
-    } else {
-      cal.step     = "end";
-      cal.endVal   = "";
-      cal.hoverVal = "";
-      injectCal();
-    }
-  } else {
-    cal.endVal   = ds < cal.startVal ? cal.startVal : ds;
-    cal.startVal = ds < cal.startVal ? ds           : cal.startVal;
-    applyCalendar();
-  }
-}
-
-function applyCalendar() {
-  if (!cal.startVal || !cal.endVal) return;
-  document.getElementById("per-start").value = cal.startVal;
-  document.getElementById("per-end").value   = cal.endVal;
-  updateDateBar();
-  const type = document.getElementById("per-type").value;
-  if (type !== "custom") {
-    document.getElementById("per-label").value = autoLabel(cal.startVal, type);
-  }
-  closeCalendar();
-}
-
-function updateDateBar() {
-  const bar = document.getElementById("cal-trigger");
-  if (!bar) return;
-  const s = document.getElementById("per-start").value;
-  const e = document.getElementById("per-end").value;
-  const fmt2 = v => v ? new Date(v + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : null;
-  bar.innerHTML = `
-    <span class="${s ? "drb-val" : "drb-ph"}">${fmt2(s) || "Start date"}</span>
-    <span class="drb-sep">→</span>
-    <span class="${e ? "drb-val" : "drb-ph"}">${fmt2(e) || "End date"}</span>
-    <span class="drb-caret">⌄</span>
-  `;
-}
-
 // ─── View: New Period ─────────────────────────────────────────────────────────
 
 function renderNewPeriod() {
@@ -712,17 +579,9 @@ function renderNewPeriod() {
             </select>
           </div>
         </div>
-        <div class="field" style="margin-top:10px">
-          <label>Date Range</label>
-          <div id="cal-trigger" class="date-range-bar" onclick="openCalendar()">
-            <span class="${startStr ? "drb-val" : "drb-ph"}">${startStr ? new Date(startStr+"T00:00:00").toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}) : "Start date"}</span>
-            <span class="drb-sep">→</span>
-            <span class="${endStr ? "drb-val" : "drb-ph"}">${endStr ? new Date(endStr+"T00:00:00").toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}) : "End date"}</span>
-            <span class="drb-caret">⌄</span>
-          </div>
-          <input type="hidden" id="per-start" value="${startStr}">
-          <input type="hidden" id="per-end"   value="${endStr}">
-          <div id="cal-anchor"></div>
+        <div class="np-meta-row">
+          <div class="field"><label>Start Date</label><input id="per-start" type="date" value="${startStr}" onchange="onStartChange()"></div>
+          <div class="field"><label>End Date</label><input id="per-end" type="date" value="${endStr}"></div>
         </div>
       </div>
       <div class="action-row">
@@ -736,11 +595,9 @@ function renderNewPeriod() {
 function onTypeChange() {
   const type  = document.getElementById("per-type").value;
   const start = document.getElementById("per-start").value;
-  closeCalendar();
   if (type !== "custom" && start) {
     document.getElementById("per-end").value   = autoEndDate(start, type);
     document.getElementById("per-label").value = autoLabel(start, type);
-    updateDateBar();
   }
 }
 
