@@ -161,6 +161,20 @@ app.post("/periods/:periodId/expenses", async (req, res) => {
   }
 });
 
+app.put("/expenses/:id", async (req, res) => {
+  try {
+    const { category, amount, note, createdAt, recurring } = req.body;
+    const expense = await Expense.findByIdAndUpdate(
+      req.params.id,
+      { category, amount, note, createdAt, recurring },
+      { new: true }
+    );
+    res.json(expense);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete("/expenses/:id", async (req, res) => {
   try {
     await Expense.findByIdAndDelete(req.params.id);

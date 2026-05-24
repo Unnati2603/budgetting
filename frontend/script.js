@@ -12,15 +12,17 @@ const DEFAULT_CATEGORIES = [
 ];
 
 const state = {
-  view: "plans",        // "plans" | "new-plan" | "periods" | "new-period" | "period"
+  view: "plans",
   plans: [],
   activePlan: null,
   periods: [],
   activePeriod: null,
   expenses: [],
+  prevExpenses: [],
   activeTab: "transactions",
   editMode: false,
   editDraft: null,
+  editingExpenseId: null,
 };
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
@@ -31,6 +33,13 @@ function fmt(n) {
 
 function fmtDate(d) {
   return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function fmtDateTime(d) {
+  return new Date(d).toLocaleString("en-IN", {
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit"
+  });
 }
 
 function toInputDate(d) {
@@ -64,39 +73,54 @@ function nextPeriodStart(periods) {
     const d = now.getDate(), y = now.getFullYear(), m = now.getMonth();
     return d >= 25 ? new Date(y, m, 25) : new Date(y, m - 1, 25);
   }
-  const latest = [...periods].sort((a, b) => new Date(b.endDate) - new Date(a.endDate))[0];
-  return new Date(latest.endDate);
+  return new Date([...periods].sort((a, b) => new Date(b.endDate) - new Date(a.endDate))[0].endDate);
+}
+
+function dayOfPeriod(period) {
+  const today = new Date();
+  const start = new Date(period.startDate);
+  const end   = new Date(period.endDate);
+  if (today < start || today > end) return null;
+  const day   = Math.floor((today - start) / 864e5) + 1;
+  const total = Math.floor((end - start) / 864e5);
+  return { day, total };
 }
 
 // ─── Render dispatcher ────────────────────────────────────────────────────────
 
 function render() {
   const app = document.getElementById("app");
-  const views = {
-    "plans":      renderPlans,
-    "new-plan":   renderNewPlan,
-    "periods":    renderPeriods,
-    "new-period": renderNewPeriod,
-    "period":     renderPeriod,
-  };
+  const views = { "plans": renderPlans, "new-plan": renderNewPlan,
+    "periods": renderPeriods, "new-period": renderNewPeriod, "period": renderPeriod };
   app.innerHTML = (views[state.view] || renderPlans)();
 }
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 
 async function loadPlans() {
-  const res = await fetch(`${API}/plans`);
-  state.plans = await res.json();
+  state.plans = await fetch(`${API}/plans`).then(r => r.json());
 }
 
 async function loadPeriods() {
-  const res = await fetch(`${API}/plans/${state.activePlan._id}/periods`);
-  state.periods = await res.json();
+  state.periods = await fetch(`${API}/plans/${state.activePlan._id}/periods`).then(r => r.json());
 }
 
 async function loadExpenses() {
-  const res = await fetch(`${API}/periods/${state.activePeriod._id}/expenses`);
-  state.expenses = await res.json();
+  state.expenses = await fetch(`${API}/periods/${state.activePeriod._id}/expenses`).then(r => r.json());
+}
+
+function getPreviousPeriod() {
+  const cur = new Date(state.activePeriod.startDate);
+  return [...state.periods]
+    .filter(p => new Date(p.endDate) <= cur)
+    .sort((a, b) => new Date(b.endDate) - new Date(a.endDate))[0] || null;
+}
+
+async function loadPrevExpenses() {
+  const prev = getPreviousPeriod();
+  state.prevExpenses = prev
+    ? await fetch(`${API}/periods/${prev._id}/expenses`).then(r => r.json())
+    : [];
 }
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
@@ -111,26 +135,22 @@ async function openPlan(id) {
 
 async function openPeriod(id) {
   state.activePeriod = state.periods.find(p => p._id === id);
-  await loadExpenses();
+  await Promise.all([loadExpenses(), loadPrevExpenses()]);
   state.view = "period";
   state.activeTab = "transactions";
+  state.editingExpenseId = null;
   render();
 }
 
 function goPlans() {
-  state.view = "plans";
-  state.activePlan = null;
-  state.periods = [];
-  state.activePeriod = null;
-  state.expenses = [];
+  Object.assign(state, { view: "plans", activePlan: null, periods: [],
+    activePeriod: null, expenses: [], prevExpenses: [] });
   render();
 }
 
 function goPeriods() {
-  state.view = "periods";
-  state.activePeriod = null;
-  state.expenses = [];
-  state.editMode = false;
+  Object.assign(state, { view: "periods", activePeriod: null, expenses: [],
+    prevExpenses: [], editMode: false, editingExpenseId: null });
   render();
 }
 
@@ -148,20 +168,15 @@ async function createPlan() {
   const name   = document.getElementById("np-name").value.trim();
   const salary = Number(document.getElementById("np-salary").value);
   if (!name || !salary) { alert("Name and salary are required"); return; }
-
-  const rows = document.querySelectorAll(".np-cat-row");
   const categories = [];
-  rows.forEach(row => {
+  document.querySelectorAll(".np-cat-row").forEach(row => {
     const n = row.querySelector(".np-cat-name").value.trim();
     const b = Number(row.querySelector(".np-cat-budget").value);
     if (n) categories.push({ name: n, budget: b || 0 });
   });
-
-  await fetch(`${API}/plans`, {
-    method: "POST",
+  await fetch(`${API}/plans`, { method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, salary, categories }),
-  });
+    body: JSON.stringify({ name, salary, categories }) });
   await loadPlans();
   state.view = "plans";
   render();
@@ -171,24 +186,16 @@ async function savePlan() {
   const draft = state.editDraft;
   draft.name   = document.getElementById("edit-name").value.trim();
   draft.salary = Number(document.getElementById("edit-salary").value);
-
-  const rows = document.querySelectorAll(".edit-cat-row");
   const categories = [];
-  rows.forEach(row => {
+  document.querySelectorAll(".edit-cat-row").forEach(row => {
     const n = row.querySelector(".edit-cat-name").value.trim();
     const b = Number(row.querySelector(".edit-cat-budget").value);
     if (n) categories.push({ name: n, budget: b || 0 });
   });
   draft.categories = categories;
-
-  const updated = await fetch(`${API}/plans/${draft._id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(draft),
-  }).then(r => r.json());
-
-  state.activePlan = updated;
-  state.editMode  = false;
+  state.activePlan = await fetch(`${API}/plans/${draft._id}`, { method: "PUT",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) }).then(r => r.json());
+  state.editMode = false;
   state.editDraft = null;
   await loadPlans();
   render();
@@ -209,12 +216,9 @@ async function createPeriod() {
   const start = document.getElementById("per-start").value;
   const end   = document.getElementById("per-end").value;
   if (!start || !end) { alert("Start and end dates are required"); return; }
-
-  await fetch(`${API}/plans/${state.activePlan._id}/periods`, {
-    method: "POST",
+  await fetch(`${API}/plans/${state.activePlan._id}/periods`, { method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label: label || autoLabel(start, type), type, startDate: start, endDate: end }),
-  });
+    body: JSON.stringify({ label: label || autoLabel(start, type), type, startDate: start, endDate: end }) });
   await loadPeriods();
   state.view = "periods";
   render();
@@ -229,27 +233,81 @@ async function deletePeriod(id) {
 
 // ─── Expenses CRUD ────────────────────────────────────────────────────────────
 
+function buildCreatedAt(dateStr) {
+  if (!dateStr) return new Date().toISOString();
+  return new Date(dateStr + "T" + new Date().toTimeString().slice(0, 8)).toISOString();
+}
+
 async function addExpense() {
-  const category = document.getElementById("cat-select").value;
-  const amount   = Number(document.getElementById("amt-input").value);
-  const note     = document.getElementById("note-input").value.trim();
+  const category  = document.getElementById("cat-select").value;
+  const amount    = Number(document.getElementById("amt-input").value);
+  const note      = document.getElementById("note-input").value.trim();
+  const date      = document.getElementById("exp-date").value;
+  const recurring = document.getElementById("exp-recurring").checked;
   if (!amount) { alert("Enter an amount"); return; }
 
-  await fetch(`${API}/periods/${state.activePeriod._id}/expenses`, {
-    method: "POST",
+  await fetch(`${API}/periods/${state.activePeriod._id}/expenses`, { method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ category, amount, note }),
-  });
-  document.getElementById("amt-input").value  = "";
+    body: JSON.stringify({ category, amount, note, recurring, createdAt: buildCreatedAt(date) }) });
+
+  document.getElementById("amt-input").value = "";
   document.getElementById("note-input").value = "";
+  document.getElementById("exp-recurring").checked = false;
   await loadExpenses();
   render();
 }
 
+async function saveExpenseEdit(id) {
+  const category  = document.getElementById(`edit-cat-${id}`).value;
+  const amount    = Number(document.getElementById(`edit-amt-${id}`).value);
+  const note      = document.getElementById(`edit-note-${id}`).value.trim();
+  const date      = document.getElementById(`edit-date-${id}`).value;
+  const recurring = document.getElementById(`edit-rec-${id}`).checked;
+  await fetch(`${API}/expenses/${id}`, { method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category, amount, note, recurring, createdAt: buildCreatedAt(date) }) });
+  state.editingExpenseId = null;
+  await loadExpenses();
+  render();
+}
+
+function cancelExpenseEdit() {
+  state.editingExpenseId = null;
+  render();
+}
+
 async function deleteExpense(id) {
+  state.editingExpenseId = null;
   await fetch(`${API}/expenses/${id}`, { method: "DELETE" });
   await loadExpenses();
   render();
+}
+
+async function importRecurring() {
+  const recurring = state.prevExpenses.filter(e => e.recurring);
+  await Promise.all(recurring.map(e =>
+    fetch(`${API}/periods/${state.activePeriod._id}/expenses`, { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category: e.category, amount: e.amount, note: e.note,
+        recurring: true, createdAt: new Date(state.activePeriod.startDate).toISOString() }) })
+  ));
+  await loadExpenses();
+  render();
+}
+
+function exportCSV() {
+  const period = state.activePeriod;
+  const rows = [
+    ["Date & Time", "Category", "Amount (INR)", "Note", "Recurring"],
+    ...state.expenses.map(e => [
+      fmtDateTime(e.createdAt), e.category, e.amount, e.note || "", e.recurring ? "Yes" : "No"
+    ]),
+  ];
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+  a.download = `${period.label || "expenses"}.csv`;
+  a.click();
 }
 
 // ─── View: Plans list ─────────────────────────────────────────────────────────
@@ -352,6 +410,23 @@ function renderPeriods() {
     `;
   }).join("") || `<div class="empty">No periods yet. Add your first one.</div>`;
 
+  const sorted = [...state.periods].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+  const trendHtml = state.periods.length > 1 ? `
+    <div class="section-label" style="margin-top:32px;margin-bottom:12px">Spending Trend</div>
+    <div class="trend-chart">
+      ${sorted.map(period => {
+        const pct = Math.min(Math.round((period.spent / p.salary) * 100), 100);
+        return `
+          <div class="trend-row">
+            <div class="trend-label">${period.label || fmtDate(period.startDate)}</div>
+            <div class="trend-bar-track"><div class="trend-bar-fill" style="width:${pct}%"></div></div>
+            <div class="trend-amount">${fmt(period.spent)} <span>${pct}%</span></div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  ` : "";
+
   return `
     <div class="container">
       <header class="plan-header">
@@ -363,6 +438,7 @@ function renderPeriods() {
         <button class="edit-btn" onclick="enterEditMode()">Edit</button>
       </header>
       <div class="plan-list">${cards}</div>
+      ${trendHtml}
       <div class="action-row" style="margin-top:20px">
         <button class="danger-btn" onclick="deletePlan('${p._id}')">Delete Plan</button>
         <button onclick="state.view='new-period'; render()">+ New Period</button>
@@ -485,45 +561,146 @@ function onStartChange() {
   }
 }
 
-// ─── View: Period (transactions + budget) ─────────────────────────────────────
+// ─── View: Compare tab ────────────────────────────────────────────────────────
+
+function renderCompareTab() {
+  const plan       = state.activePlan;
+  const prevPeriod = getPreviousPeriod();
+  if (!prevPeriod) return `<div class="empty">No previous period to compare with</div>`;
+
+  const byCat = {}, prevByCat = {};
+  state.expenses.forEach(e => { byCat[e.category] = (byCat[e.category] || 0) + e.amount; });
+  state.prevExpenses.forEach(e => { prevByCat[e.category] = (prevByCat[e.category] || 0) + e.amount; });
+
+  const thisLabel = state.activePeriod.label || "This";
+  const prevLabel = prevPeriod.label || "Previous";
+
+  const rows = plan.categories.map(({ name, budget }) => {
+    const t = byCat[name] || 0, v = prevByCat[name] || 0;
+    const diff = t - v;
+    const clr  = diff > 0 ? "var(--danger)" : diff < 0 ? "var(--success)" : "var(--muted)";
+    const dStr = diff === 0 ? "—" : (diff > 0 ? "+" : "−") + fmt(Math.abs(diff));
+    return `
+      <div class="compare-row">
+        <div class="compare-cat">${name}</div>
+        <div class="compare-cell">${fmt(t)}<span class="compare-pct">${Math.round(t / budget * 100)}%</span></div>
+        <div class="compare-cell">${fmt(v)}<span class="compare-pct">${Math.round(v / budget * 100)}%</span></div>
+        <div class="compare-diff" style="color:${clr}">${dStr}</div>
+      </div>
+    `;
+  }).join("");
+
+  const tT = state.expenses.reduce((s, e) => s + e.amount, 0);
+  const vT = state.prevExpenses.reduce((s, e) => s + e.amount, 0);
+  const dT = tT - vT;
+
+  return `
+    <div class="compare-header">
+      <div class="compare-cat"></div>
+      <div class="compare-label">${thisLabel}</div>
+      <div class="compare-label">${prevLabel}</div>
+      <div class="compare-label">Change</div>
+    </div>
+    ${rows}
+    <div class="compare-total">
+      <div class="compare-cat">Total</div>
+      <div class="compare-cell">${fmt(tT)}</div>
+      <div class="compare-cell">${fmt(vT)}</div>
+      <div class="compare-diff" style="color:${dT > 0 ? "var(--danger)" : dT < 0 ? "var(--success)" : "var(--muted)"}">
+        ${dT === 0 ? "—" : (dT > 0 ? "+" : "−") + fmt(Math.abs(dT))}
+      </div>
+    </div>
+  `;
+}
+
+// ─── View: Period ─────────────────────────────────────────────────────────────
 
 function renderPeriod() {
   const plan   = state.activePlan;
   const period = state.activePeriod;
   const spent  = state.expenses.reduce((s, e) => s + e.amount, 0);
   const rem    = plan.salary - spent;
+  const dayInfo = dayOfPeriod(period);
+  const today   = toInputDate(new Date());
 
   const catOptions = plan.categories.map(c => `<option>${c.name}</option>`).join("");
 
+  // ── Recurring import banner
+  const recurringFromPrev = state.prevExpenses.filter(e => e.recurring);
+  const alreadyImported   = state.expenses.some(e => e.recurring);
+  const importBanner = recurringFromPrev.length > 0 && !alreadyImported ? `
+    <div class="import-banner">
+      <span>${recurringFromPrev.length} recurring expense${recurringFromPrev.length > 1 ? "s" : ""} from ${getPreviousPeriod()?.label || "last period"}</span>
+      <button onclick="importRecurring()">Import</button>
+    </div>
+  ` : "";
+
+  // ── Transactions
   const transactionsHtml = state.expenses.length
-    ? state.expenses.map(e => `
-        <div class="expense-item">
-          <div class="expense-meta">
-            <div class="cat">${e.category}</div>
-            ${e.note ? `<div class="note">${e.note}</div>` : ""}
-            <div class="date">${new Date(e.createdAt).toLocaleString("en-IN", {
-              day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
-            })}</div>
+    ? state.expenses.map(e => {
+        if (e._id === state.editingExpenseId) {
+          const catOpts = plan.categories
+            .map(c => `<option ${c.name === e.category ? "selected" : ""}>${c.name}</option>`).join("");
+          return `
+            <div class="expense-edit-form">
+              <div class="edit-expense-row">
+                <select id="edit-cat-${e._id}">${catOpts}</select>
+                <input type="number" id="edit-amt-${e._id}" value="${e.amount}" placeholder="Amount">
+              </div>
+              <div class="edit-expense-row">
+                <input type="text" id="edit-note-${e._id}" value="${e.note || ""}" placeholder="Note">
+                <input type="date" id="edit-date-${e._id}" value="${toInputDate(e.createdAt)}">
+              </div>
+              <div class="edit-expense-row">
+                <label class="recurring-label">
+                  <input type="checkbox" id="edit-rec-${e._id}" ${e.recurring ? "checked" : ""}> Recurring
+                </label>
+                <div style="display:flex;gap:8px">
+                  <button onclick="saveExpenseEdit('${e._id}')">Save</button>
+                  <button class="secondary-btn" onclick="cancelExpenseEdit()">Cancel</button>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+        return `
+          <div class="expense-item">
+            <div class="expense-meta">
+              <div class="cat">
+                ${e.category}
+                ${e.recurring ? `<span class="recurring-badge">recurring</span>` : ""}
+              </div>
+              ${e.note ? `<div class="note">${e.note}</div>` : ""}
+              <div class="date">${fmtDateTime(e.createdAt)}</div>
+            </div>
+            <div class="expense-right">
+              <span class="expense-amount">${fmt(e.amount)}</span>
+              <button class="edit-expense-btn" onclick="state.editingExpenseId='${e._id}'; render()">Edit</button>
+              <button class="del-btn" onclick="deleteExpense('${e._id}')">Delete</button>
+            </div>
           </div>
-          <div class="expense-right">
-            <span class="expense-amount">${fmt(e.amount)}</span>
-            <button class="del-btn" onclick="deleteExpense('${e._id}')">Delete</button>
-          </div>
-        </div>
-      `).join("")
+        `;
+      }).join("")
     : `<div class="empty">No transactions yet</div>`;
 
-  const byCategory = {};
-  state.expenses.forEach(e => {
-    byCategory[e.category] = (byCategory[e.category] || 0) + e.amount;
-  });
+  // ── Budget
+  const byCategory = {}, prevByCategory = {};
+  state.expenses.forEach(e => { byCategory[e.category] = (byCategory[e.category] || 0) + e.amount; });
+  state.prevExpenses.forEach(e => { prevByCategory[e.category] = (prevByCategory[e.category] || 0) + e.amount; });
+  const prevPeriod = getPreviousPeriod();
 
   const budgetHtml = plan.categories.map(({ name, budget }) => {
-    const sp  = byCategory[name] || 0;
-    const pr  = budget - sp;
-    const pct = Math.min((sp / budget) * 100, 100);
-    const over = pr < 0;
-    const clr  = pct < 70 ? "var(--success)" : pct < 90 ? "var(--warning)" : "var(--danger)";
+    const prevSpent  = prevByCategory[name] || 0;
+    const carryOver  = Math.max(0, prevSpent - budget);
+    const effective  = budget - carryOver;
+    const sp         = byCategory[name] || 0;
+    const pr         = effective - sp;
+    const over       = pr < 0;
+    const pct        = effective > 0 ? Math.min((sp / effective) * 100, 100) : 100;
+    const clr        = pct < 70 ? "var(--success)" : pct < 90 ? "var(--warning)" : "var(--danger)";
+    const carryNote  = carryOver > 0
+      ? `<div class="carry-note">${fmt(carryOver)} carried from ${prevPeriod?.label || "last period"} · budget reduced to ${fmt(effective)}</div>`
+      : "";
     return `
       <div class="budget-item">
         <div class="budget-header">
@@ -532,9 +709,10 @@ function renderPeriod() {
             <span class="budget-remaining" style="color:${over ? "var(--danger)" : "var(--text)"}">
               ${over ? fmt(-pr) + " excess" : fmt(pr) + " left"}
             </span>
-            <span class="budget-of"> / ${fmt(budget)}</span>
+            <span class="budget-of"> / ${fmt(effective)}</span>
           </span>
         </div>
+        ${carryNote}
         <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${clr}"></div></div>
         <div class="budget-footer">
           <span>${over ? fmt(sp) + " spent · carries over" : fmt(sp) + " spent"}</span>
@@ -545,7 +723,12 @@ function renderPeriod() {
   }).join("");
 
   const tA = state.activeTab === "transactions" ? "active" : "";
-  const bA = state.activeTab === "budget" ? "active" : "";
+  const bA = state.activeTab === "budget"       ? "active" : "";
+  const cA = state.activeTab === "compare"      ? "active" : "";
+
+  const dayBadge = dayInfo
+    ? `<span class="day-badge">Day ${dayInfo.day} of ${dayInfo.total}</span>`
+    : "";
 
   return `
     <div class="container">
@@ -553,32 +736,42 @@ function renderPeriod() {
         <button class="back-btn" onclick="goPeriods()">← ${plan.name}</button>
         <div class="plan-header-center">
           <h1>${period.label || fmtDate(period.startDate)}</h1>
-          <p>${fmtDate(period.startDate)} – ${fmtDate(period.endDate)}</p>
+          <p>${fmtDate(period.startDate)} – ${fmtDate(period.endDate)} ${dayBadge}</p>
         </div>
-        <button class="edit-btn danger-btn-sm" onclick="deletePeriod('${period._id}')">Delete</button>
+        <button class="danger-btn-sm" onclick="deletePeriod('${period._id}')">Delete</button>
       </header>
 
       <div class="summary">
         <div class="summary-item"><div class="label">Salary</div><div class="value">${fmt(plan.salary)}</div></div>
         <div class="summary-item"><div class="label">Spent</div><div class="value">${fmt(spent)}</div></div>
-        <div class="summary-item"><div class="label">Remaining</div><div class="value" style="color:${rem < 0 ? "var(--danger)" : "inherit"}">${fmt(rem)}</div></div>
+        <div class="summary-item"><div class="label">Remaining</div>
+          <div class="value" style="color:${rem < 0 ? "var(--danger)" : "inherit"}">${fmt(rem)}</div>
+        </div>
       </div>
 
       <div class="form-card">
         <div class="form-row">
           <select id="cat-select">${catOptions}</select>
           <input type="number" id="amt-input" placeholder="Amount (₹)">
-          <input type="text"   id="note-input" placeholder="Note">
+          <input type="text"   id="note-input" placeholder="Note" onkeydown="if(event.key==='Enter')addExpense()">
+          <input type="date"   id="exp-date" value="${today}">
+          <label class="recurring-label"><input type="checkbox" id="exp-recurring"> Recurring</label>
           <button onclick="addExpense()">Add</button>
         </div>
       </div>
 
-      <div class="tabs">
-        <button class="tab-btn ${tA}" id="tab-transactions" onclick="switchTab('transactions')">Transactions</button>
-        <button class="tab-btn ${bA}" id="tab-budget"       onclick="switchTab('budget')">Budget</button>
+      <div class="tabs-row">
+        <div class="tabs">
+          <button class="tab-btn ${tA}" id="tab-transactions" onclick="switchTab('transactions')">Transactions</button>
+          <button class="tab-btn ${bA}" id="tab-budget"       onclick="switchTab('budget')">Budget</button>
+          <button class="tab-btn ${cA}" id="tab-compare"      onclick="switchTab('compare')">Compare</button>
+        </div>
+        <button class="csv-btn" onclick="exportCSV()">Export CSV</button>
       </div>
-      <div class="tab-content ${tA}" id="content-transactions">${transactionsHtml}</div>
+
+      <div class="tab-content ${tA}" id="content-transactions">${importBanner}${transactionsHtml}</div>
       <div class="tab-content ${bA}" id="content-budget">${budgetHtml}</div>
+      <div class="tab-content ${cA}" id="content-compare">${renderCompareTab()}</div>
     </div>
   `;
 }

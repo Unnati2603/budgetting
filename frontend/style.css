@@ -184,8 +184,9 @@ header { margin-bottom: 28px; }
 
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 140px 1fr 64px;
+  grid-template-columns: 1.5fr 110px 1fr 120px auto auto;
   gap: 8px;
+  align-items: center;
 }
 
 /* ── Inputs ── */
@@ -366,6 +367,12 @@ button:hover { opacity: 0.8; }
 .budget-remaining { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .budget-of { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+.carry-note {
+  font-size: 11px;
+  color: var(--warning);
+  margin-bottom: 8px;
+}
+
 .bar-track { height: 3px; background: var(--border); border-radius: 99px; overflow: hidden; }
 .bar-fill  { height: 100%; border-radius: 99px; transition: width 0.4s ease; }
 
@@ -436,11 +443,214 @@ button:hover { opacity: 0.8; }
   text-align: center;
 }
 
+/* ── Tabs row (tabs + CSV export button) ── */
+.tabs-row {
+  display: flex;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  gap: 12px;
+}
+
+.tabs-row .tabs {
+  flex: 1;
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.csv-btn {
+  background: none;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  font-size: 11px;
+  border-radius: 6px;
+  margin-bottom: 1px;
+  white-space: nowrap;
+}
+
+.csv-btn:hover { color: var(--text); border-color: var(--text); opacity: 1; }
+
+/* ── Day badge ── */
+.day-badge {
+  display: inline-block;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+/* ── Recurring badge ── */
+.recurring-badge {
+  display: inline-block;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent);
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-weight: 400;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* ── Recurring label (checkbox in form) ── */
+.recurring-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.recurring-label input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* ── Import recurring banner ── */
+.import-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--warning);
+}
+
+.import-banner button {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.import-banner button:hover { background: rgba(245, 158, 11, 0.22); opacity: 1; }
+
+/* ── Expense edit button ── */
+.edit-expense-btn {
+  background: none;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+.edit-expense-btn:hover { color: var(--accent); border-color: var(--accent); opacity: 1; }
+
+/* ── Inline expense edit form ── */
+.expense-edit-form {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.edit-expense-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.edit-expense-row:last-child { margin-bottom: 0; }
+
+/* ── Compare tab ── */
+.compare-header, .compare-row, .compare-total {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 72px;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.compare-row:last-of-type { border-bottom: none; }
+
+.compare-total {
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+  margin-top: 4px;
+}
+
+.compare-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.compare-cell { display: flex; flex-direction: column; gap: 2px; }
+.compare-pct  { font-size: 11px; color: var(--muted); }
+.compare-diff { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.compare-cat  { font-size: 13px; }
+
+/* ── Trend chart ── */
+.trend-chart { display: flex; flex-direction: column; gap: 10px; }
+
+.trend-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 90px;
+  gap: 12px;
+  align-items: center;
+}
+
+.trend-label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trend-bar-track {
+  height: 6px;
+  background: var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.trend-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 99px;
+  transition: width 0.5s ease;
+}
+
+.trend-amount {
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-amount span { color: var(--muted); font-size: 11px; margin-left: 4px; }
+
 /* ── Responsive ── */
 @media (max-width: 560px) {
   .summary-item .value { font-size: 16px; }
-  .form-row { grid-template-columns: 1fr 1fr; }
-  .form-row select { grid-column: 1 / -1; }
+  .form-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .form-row select          { grid-column: 1 / -1; }
+  .form-row .recurring-label { grid-column: 1; }
+  .form-row button          { grid-column: 2; }
   .np-meta-row { grid-template-columns: 1fr; }
   .np-cat-row, .edit-cat-row { grid-template-columns: 1fr 90px 36px; }
+  .compare-header, .compare-row, .compare-total { grid-template-columns: 1.5fr 1fr 1fr 60px; font-size: 12px; }
+  .trend-row { grid-template-columns: 80px 1fr 70px; }
 }
