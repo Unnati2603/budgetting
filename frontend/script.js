@@ -26,6 +26,8 @@ const state = {
   incomes: [],
   editingIncomeId: null,
   analytics: null,
+  token: localStorage.getItem("token") || null,
+  currentUser: null,
 };
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
@@ -89,10 +91,134 @@ function dayOfPeriod(period) {
   return { day, total };
 }
 
+// ─── Authenticated fetch ──────────────────────────────────────────────────────
+
+async function apiFetch(url, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (state.token) headers["Authorization"] = `Bearer ${state.token}`;
+  const r = await fetch(url, { ...options, headers });
+  if (r.status === 401 && state.token) { logout(); throw new Error("Session expired"); }
+  return r;
+}
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+
+function setAuth(token, user) {
+  state.token = token;
+  state.currentUser = user;
+  localStorage.setItem("token", token);
+  loadPlans().then(() => { state.view = "plans"; render(); });
+}
+
+function logout() {
+  state.token = null;
+  state.currentUser = null;
+  localStorage.removeItem("token");
+  Object.assign(state, {
+    view: "plans", plans: [], activePlan: null, periods: [], activePeriod: null,
+    expenses: [], prevExpenses: [], incomes: [], analytics: null,
+  });
+  render();
+}
+
+async function loginEmail() {
+  const email    = document.getElementById("login-email").value.trim();
+  const password = document.getElementById("login-password").value;
+  if (!email || !password) { alert("Email and password required"); return; }
+  try {
+    const data = await fetch(`${API}/auth/login`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }).then(r => r.json());
+    if (data.error) { alert(data.error); return; }
+    setAuth(data.token, data.user);
+  } catch { alert("Login failed — is the server running?"); }
+}
+
+async function registerEmail() {
+  const name     = document.getElementById("reg-name").value.trim();
+  const email    = document.getElementById("reg-email").value.trim();
+  const password = document.getElementById("reg-password").value;
+  if (!email || !password) { alert("Email and password required"); return; }
+  try {
+    const data = await fetch(`${API}/auth/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, password }),
+    }).then(r => r.json());
+    if (data.error) { alert(data.error); return; }
+    setAuth(data.token, data.user);
+  } catch { alert("Registration failed — is the server running?"); }
+}
+
+async function handleGoogleCredential(response) {
+  try {
+    const data = await fetch(`${API}/auth/google`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: response.credential }),
+    }).then(r => r.json());
+    if (data.error) { alert("Google sign-in failed: " + data.error); return; }
+    setAuth(data.token, data.user);
+  } catch { alert("Google sign-in failed"); }
+}
+
+async function initGoogleButton() {
+  const container = document.getElementById("google-btn");
+  if (!container) return;
+  if (!window.google?.accounts?.id) { setTimeout(initGoogleButton, 200); return; }
+  if (!window._googleClientId) {
+    try {
+      const cfg = await fetch(`${API}/auth/config`).then(r => r.json());
+      window._googleClientId = cfg.googleClientId;
+    } catch { return; }
+  }
+  if (!window._googleClientId) return;
+  google.accounts.id.initialize({ client_id: window._googleClientId, callback: handleGoogleCredential });
+  google.accounts.id.renderButton(container, { theme: "filled_black", size: "large", width: "340" });
+}
+
+// ─── View: Login ──────────────────────────────────────────────────────────────
+
+function renderLogin() {
+  return `
+    <div class="login-wrap">
+      <div class="login-brand">Budget Tracker</div>
+      <div class="login-card">
+        <div id="google-btn"></div>
+        <div class="login-divider"><span>or</span></div>
+        <div class="field"><label>Email</label><input id="login-email" type="email" placeholder="you@example.com" onkeydown="if(event.key==='Enter')loginEmail()"></div>
+        <div class="field"><label>Password</label><input id="login-password" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')loginEmail()"></div>
+        <button onclick="loginEmail()">Sign In</button>
+        <button class="secondary-btn" onclick="state.view='register'; render()">Create Account</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderRegister() {
+  return `
+    <div class="login-wrap">
+      <div class="login-brand">Budget Tracker</div>
+      <div class="login-card">
+        <h2 class="login-title">Create Account</h2>
+        <div class="field"><label>Name</label><input id="reg-name" type="text" placeholder="Your name"></div>
+        <div class="field"><label>Email</label><input id="reg-email" type="email" placeholder="you@example.com"></div>
+        <div class="field"><label>Password</label><input id="reg-password" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')registerEmail()"></div>
+        <button onclick="registerEmail()">Create Account</button>
+        <button class="secondary-btn" onclick="state.view='plans'; render()">Back to Sign In</button>
+      </div>
+    </div>
+  `;
+}
+
 // ─── Render dispatcher ────────────────────────────────────────────────────────
 
 function render() {
   const app = document.getElementById("app");
+  if (!state.token) {
+    app.innerHTML = state.view === "register" ? renderRegister() : renderLogin();
+    requestAnimationFrame(initGoogleButton);
+    return;
+  }
   const views = { "plans": renderPlans, "new-plan": renderNewPlan,
     "periods": renderPeriods, "new-period": renderNewPeriod, "period": renderPeriod };
   app.innerHTML = (views[state.view] || renderPlans)();
@@ -101,15 +227,15 @@ function render() {
 // ─── API ──────────────────────────────────────────────────────────────────────
 
 async function loadPlans() {
-  state.plans = await fetch(`${API}/plans`).then(r => r.json());
+  state.plans = await apiFetch(`${API}/plans`).then(r => r.json());
 }
 
 async function loadPeriods() {
-  state.periods = await fetch(`${API}/plans/${state.activePlan._id}/periods`).then(r => r.json());
+  state.periods = await apiFetch(`${API}/plans/${state.activePlan._id}/periods`).then(r => r.json());
 }
 
 async function loadExpenses() {
-  state.expenses = await fetch(`${API}/periods/${state.activePeriod._id}/expenses`).then(r => r.json());
+  state.expenses = await apiFetch(`${API}/periods/${state.activePeriod._id}/expenses`).then(r => r.json());
 }
 
 function getPreviousPeriod() {
@@ -122,16 +248,16 @@ function getPreviousPeriod() {
 async function loadPrevExpenses() {
   const prev = getPreviousPeriod();
   state.prevExpenses = prev
-    ? await fetch(`${API}/periods/${prev._id}/expenses`).then(r => r.json())
+    ? await apiFetch(`${API}/periods/${prev._id}/expenses`).then(r => r.json())
     : [];
 }
 
 async function loadIncomes() {
-  state.incomes = await fetch(`${API}/periods/${state.activePeriod._id}/incomes`).then(r => r.json());
+  state.incomes = await apiFetch(`${API}/periods/${state.activePeriod._id}/incomes`).then(r => r.json());
 }
 
 async function loadAnalytics() {
-  state.analytics = await fetch(`${API}/plans/${state.activePlan._id}/analytics`).then(r => r.json());
+  state.analytics = await apiFetch(`${API}/plans/${state.activePlan._id}/analytics`).then(r => r.json());
 }
 
 async function autoCreatePeriodIfNeeded() {
@@ -145,7 +271,7 @@ async function autoCreatePeriodIfNeeded() {
     const s = toInputDate(new Date(latest.endDate));
     const e = autoEndDate(s, latest.type);
     const l = autoLabel(s, latest.type);
-    const r = await fetch(`${API}/plans/${state.activePlan._id}/periods`, {
+    const r = await apiFetch(`${API}/plans/${state.activePlan._id}/periods`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ label: l, type: latest.type, startDate: s, endDate: e }),
     });
@@ -211,7 +337,7 @@ async function createPlan() {
     const b = Number(row.querySelector(".np-cat-budget").value);
     if (n) categories.push({ name: n, budget: b || 0 });
   });
-  await fetch(`${API}/plans`, { method: "POST",
+  await apiFetch(`${API}/plans`, { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, salary, categories, carryForward }) });
   await loadPlans();
@@ -231,7 +357,7 @@ async function savePlan() {
     if (n) categories.push({ name: n, budget: b || 0 });
   });
   draft.categories = categories;
-  state.activePlan = await fetch(`${API}/plans/${draft._id}`, { method: "PUT",
+  state.activePlan = await apiFetch(`${API}/plans/${draft._id}`, { method: "PUT",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) }).then(r => r.json());
   state.editMode = false;
   state.editDraft = null;
@@ -242,7 +368,7 @@ async function savePlan() {
 
 async function deletePlan(id) {
   if (!confirm("Delete this plan and all its periods and transactions?")) return;
-  await fetch(`${API}/plans/${id}`, { method: "DELETE" });
+  await apiFetch(`${API}/plans/${id}`, { method: "DELETE" });
   await loadPlans();
   goPlans();
 }
@@ -255,7 +381,7 @@ async function createPeriod() {
   const start = document.getElementById("per-start").value;
   const end   = document.getElementById("per-end").value;
   if (!start || !end) { alert("Start and end dates are required"); return; }
-  await fetch(`${API}/plans/${state.activePlan._id}/periods`, { method: "POST",
+  await apiFetch(`${API}/plans/${state.activePlan._id}/periods`, { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label: label || autoLabel(start, type), type, startDate: start, endDate: end }) });
   await loadPeriods();
@@ -265,7 +391,7 @@ async function createPeriod() {
 
 async function deletePeriod(id) {
   if (!confirm("Delete this period and all its transactions?")) return;
-  await fetch(`${API}/periods/${id}`, { method: "DELETE" });
+  await apiFetch(`${API}/periods/${id}`, { method: "DELETE" });
   await loadPeriods();
   goPeriods();
 }
@@ -285,7 +411,7 @@ async function addExpense() {
   const recurring = document.getElementById("exp-recurring").checked;
   if (!amount) { alert("Enter an amount"); return; }
 
-  await fetch(`${API}/periods/${state.activePeriod._id}/expenses`, { method: "POST",
+  await apiFetch(`${API}/periods/${state.activePeriod._id}/expenses`, { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ category, amount, note, recurring, createdAt: buildCreatedAt(date) }) });
 
@@ -302,7 +428,7 @@ async function saveExpenseEdit(id) {
   const note      = document.getElementById(`edit-note-${id}`).value.trim();
   const date      = document.getElementById(`edit-date-${id}`).value;
   const recurring = document.getElementById(`edit-rec-${id}`).checked;
-  await fetch(`${API}/expenses/${id}`, { method: "PUT",
+  await apiFetch(`${API}/expenses/${id}`, { method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ category, amount, note, recurring, createdAt: buildCreatedAt(date) }) });
   state.editingExpenseId = null;
@@ -317,7 +443,7 @@ function cancelExpenseEdit() {
 
 async function deleteExpense(id) {
   state.editingExpenseId = null;
-  await fetch(`${API}/expenses/${id}`, { method: "DELETE" });
+  await apiFetch(`${API}/expenses/${id}`, { method: "DELETE" });
   await loadExpenses();
   render();
 }
@@ -325,13 +451,20 @@ async function deleteExpense(id) {
 async function importRecurring() {
   const recurring = state.prevExpenses.filter(e => e.recurring);
   await Promise.all(recurring.map(e =>
-    fetch(`${API}/periods/${state.activePeriod._id}/expenses`, { method: "POST",
+    apiFetch(`${API}/periods/${state.activePeriod._id}/expenses`, { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ category: e.category, amount: e.amount, note: e.note,
         recurring: true, createdAt: new Date(state.activePeriod.startDate).toISOString() }) })
   ));
   await loadExpenses();
   render();
+}
+
+function periodBudgetTotal() {
+  const cats = state.activePeriod?.categoryBudgets?.length
+    ? state.activePeriod.categoryBudgets
+    : state.activePlan?.categories || [];
+  return cats.reduce((s, c) => s + c.budget, 0);
 }
 
 async function addIncome() {
@@ -342,7 +475,13 @@ async function addIncome() {
   const recurring = document.getElementById("inc-recurring").checked;
   if (!source) { alert("Enter a source"); return; }
   if (!amount) { alert("Enter an amount"); return; }
-  await fetch(`${API}/periods/${state.activePeriod._id}/incomes`, { method: "POST",
+  const limit        = periodBudgetTotal();
+  const currentTotal = state.incomes.reduce((s, i) => s + i.amount, 0);
+  if (limit > 0 && currentTotal + amount > limit) {
+    alert(`Total income would exceed the combined category budget of ${fmt(limit)}.\nCurrently logged: ${fmt(currentTotal)} · Trying to add: ${fmt(amount)}`);
+    return;
+  }
+  await apiFetch(`${API}/periods/${state.activePeriod._id}/incomes`, { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, amount, note, recurring, createdAt: buildCreatedAt(date) }) });
   await loadIncomes();
@@ -355,7 +494,13 @@ async function saveIncomeEdit(id) {
   const note      = document.getElementById(`edit-inc-note-${id}`).value.trim();
   const date      = document.getElementById(`edit-inc-date-${id}`).value;
   const recurring = document.getElementById(`edit-inc-rec-${id}`).checked;
-  await fetch(`${API}/incomes/${id}`, { method: "PUT",
+  const limit        = periodBudgetTotal();
+  const otherTotal   = state.incomes.filter(i => i._id !== id).reduce((s, i) => s + i.amount, 0);
+  if (limit > 0 && otherTotal + amount > limit) {
+    alert(`Total income would exceed the combined category budget of ${fmt(limit)}.`);
+    return;
+  }
+  await apiFetch(`${API}/incomes/${id}`, { method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, amount, note, recurring, createdAt: buildCreatedAt(date) }) });
   state.editingIncomeId = null;
@@ -370,7 +515,7 @@ function cancelIncomeEdit() {
 
 async function deleteIncome(id) {
   state.editingIncomeId = null;
-  await fetch(`${API}/incomes/${id}`, { method: "DELETE" });
+  await apiFetch(`${API}/incomes/${id}`, { method: "DELETE" });
   await loadIncomes();
   render();
 }
@@ -403,12 +548,14 @@ function renderPlans() {
     </div>
   `).join("") || `<div class="empty">No plans yet. Create your first one.</div>`;
 
+  const userLabel = state.currentUser?.name || state.currentUser?.email || "";
   return `
     <div class="container">
       <header class="list-header">
         <h1>Budget Tracker</h1>
         <button onclick="state.view='new-plan'; render()">+ New Plan</button>
       </header>
+      ${userLabel ? `<div class="user-bar"><span>${userLabel}</span><button class="ghost-btn" onclick="logout()">Log out</button></div>` : ""}
       <div class="plan-list">${cards}</div>
     </div>
   `;
@@ -1017,6 +1164,14 @@ function renderIncomeTab() {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 (async () => {
-  await loadPlans();
+  if (state.token) {
+    try {
+      state.currentUser = await apiFetch(`${API}/auth/me`).then(r => r.json());
+      await loadPlans();
+    } catch {
+      state.token = null;
+      localStorage.removeItem("token");
+    }
+  }
   render();
 })();

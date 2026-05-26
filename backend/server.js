@@ -2,6 +2,9 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const dotenv = require("dotenv");
+const bcrypt = require("bcryptjs");
+const jwt    = require("jsonwebtoken");
+const { OAuth2Client } = require("google-auth-library");
 
 dotenv.config();
 
@@ -9,6 +12,14 @@ const Plan    = require("./models/Plan");
 const Period  = require("./models/Period");
 const Expense = require("./models/Expense");
 const Income  = require("./models/Income");
+const User    = require("./models/User");
+const authMiddleware = require("./middleware/auth");
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+function signToken(userId) {
+  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "90d" });
+}
 
 const app = express();
 app.use(cors());
@@ -62,11 +73,85 @@ mongoose.connect(process.env.MONGO_URI)
 
 app.get("/", (req, res) => res.send("Budget Tracker API"));
 
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+
+app.get("/auth/config", (req, res) => {
+  res.json({ googleClientId: process.env.GOOGLE_CLIENT_ID || "" });
+});
+
+app.post("/auth/google", async (req, res) => {
+  try {
+    const { credential } = req.body;
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    let user = await User.findOne({ googleId: payload.sub });
+    if (!user) {
+      user = await User.findOne({ email: payload.email });
+      if (user) {
+        user.googleId = payload.sub;
+        if (!user.name) user.name = payload.name;
+        await user.save();
+      } else {
+        user = await User.create({ email: payload.email, googleId: payload.sub, name: payload.name });
+      }
+    }
+    // Migrate plans that have no owner to this user
+    await Plan.updateMany({ userId: { $exists: false } }, { userId: user._id });
+    res.json({ token: signToken(user._id), user: { name: user.name, email: user.email } });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/auth/register", async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+    if (await User.findOne({ email: email.toLowerCase() }))
+      return res.status(400).json({ error: "Email already registered" });
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await User.create({ email: email.toLowerCase(), passwordHash, name: name || email });
+    await Plan.updateMany({ userId: { $exists: false } }, { userId: user._id });
+    res.status(201).json({ token: signToken(user._id), user: { name: user.name, email: user.email } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email: email?.toLowerCase() });
+    if (!user || !user.passwordHash) return res.status(401).json({ error: "Invalid credentials" });
+    if (!await bcrypt.compare(password, user.passwordHash))
+      return res.status(401).json({ error: "Invalid credentials" });
+    res.json({ token: signToken(user._id), user: { name: user.name, email: user.email } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/auth/me", authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select("-passwordHash");
+    if (!user) return res.status(404).json({ error: "Not found" });
+    res.json({ name: user.name, email: user.email });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// All routes below require a valid JWT
+app.use(authMiddleware);
+
 // ─── Plans ───────────────────────────────────────────────────────────────────
 
 app.get("/plans", async (req, res) => {
   try {
-    const plans = await Plan.find().sort({ createdAt: -1 });
+    const plans = await Plan.find({ userId: req.userId }).sort({ createdAt: -1 });
     const result = await Promise.all(plans.map(async p => {
       const periodCount = await Period.countDocuments({ planId: p._id });
       return { ...p.toObject(), periodCount };
@@ -79,7 +164,7 @@ app.get("/plans", async (req, res) => {
 
 app.post("/plans", async (req, res) => {
   try {
-    const plan = await Plan.create(req.body);
+    const plan = await Plan.create({ ...req.body, userId: req.userId });
     res.status(201).json(plan);
   } catch (err) {
     res.status(500).json({ error: err.message });
